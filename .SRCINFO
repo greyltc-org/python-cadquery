@@ -28,7 +28,7 @@ pkgbase = python-cadquery
 	depends = openblas
 	depends = libxcursor
 	conflicts = python-cadquery-git
-	source = git+https://github.com/CadQuery/cadquery#commit=0006f90040eefa958d8b5448a4e3587ee6244680
+	source = git+https://github.com/CadQuery/cadquery#commit=#commit=0006f90040eefa958d8b5448a4e3587ee6244680
 	sha256sums = c2a99dbbe752cb0316692581c4ccac4ff37ad9440976710f28243f4caf777fd0
 
 pkgname = python-cadquery

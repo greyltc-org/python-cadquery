@@ -1,5 +1,4 @@
 pkgname=python-cadquery
-_build_hash=0006f90040eefa958d8b5448a4e3587ee6244680
 pkgver=v2.5.2.r27
 pkgrel=1
 pkgdesc="A parametric CAD scripting framework based on PythonOCC"
@@ -36,7 +35,8 @@ python-installer
 python-wheel
 )
 
-source=("git+https://github.com/CadQuery/cadquery#commit=${_build_hash}")
+_fragment="#commit=0006f90040eefa958d8b5448a4e3587ee6244680"
+source=("git+https://github.com/CadQuery/cadquery#commit=${_fragment}")
 
 sha256sums=('c2a99dbbe752cb0316692581c4ccac4ff37ad9440976710f28243f4caf777fd0')
 
