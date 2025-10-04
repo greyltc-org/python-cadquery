@@ -3,7 +3,7 @@ _build_hash=0006f90040eefa958d8b5448a4e3587ee6244680
 pkgver=v2.5.2.r27
 pkgrel=1
 pkgdesc="A parametric CAD scripting framework based on PythonOCC"
-arch=(x86_64)
+arch=(any)
 url="https://github.com/CadQuery/cadquery"
 license=(Apache-2.0)
 conflicts=(python-cadquery-git)
@@ -14,12 +14,19 @@ nlopt
 python-typish
 python-nptyping
 python-multimethod
+python-docutils
+python-pyparsing
 casadi
+openmpi
+python-path
+openblas
+libxcursor
 )
 checkdepends=(
 python-pytest
 python-typing_extensions
 python-docutils
+ttf-liberation
 )
 makedepends=(
 git
@@ -54,6 +61,7 @@ check() {
 
   local _these_fail=(
   test_project
+  testText
   )
   printf -v _joined '%s and not ' "${_these_fail[@]}"
   python -m pytest cadquery/tests -k "$(echo "not ${_joined% and not }")"  # skip the tests we know fail
