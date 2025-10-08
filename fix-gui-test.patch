@@ -1,0 +1,55 @@
+From 44230bd0c88fbaf12cf3ea22d936a8db06cb81b6 Mon Sep 17 00:00:00 2001
+From: "M. Greyson Christoforo" <grey@christoforo.net>
+Date: Tue, 7 Oct 2025 10:22:36 +0100
+Subject: [PATCH] rename gui test option to avoid conflict
+
+---
+ appveyor.yml      |  2 +-
+ tests/conftest.py | 12 ++++++------
+ 2 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/appveyor.yml b/appveyor.yml
+index 6c1632e00..6affab969 100644
+--- a/appveyor.yml
++++ b/appveyor.yml
+@@ -37,7 +37,7 @@ build: false
+ test_script:
+     - mamba run -n cadquery black . --diff --check
+     - mamba run -n cadquery mypy cadquery
+-    - mamba run -n cadquery pytest -v --gui --cov
++    - mamba run -n cadquery pytest -v --tgui --cov
+ 
+ on_success:
+     - mamba run -n cadquery codecov
+diff --git a/tests/conftest.py b/tests/conftest.py
+index d30b369de..5a0546f33 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -2,21 +2,21 @@
+ 
+ 
+ def pytest_addoption(parser):
+-    parser.addoption("--gui", action="store_true", default=False, help="run gui tests")
++    parser.addoption("--tgui", action="store_true", default=False, help="run gui tests")
+ 
+ 
+ def pytest_configure(config):
+-    config.addinivalue_line("markers", "gui: mark gui test")
++    config.addinivalue_line("markers", "tgui: mark gui test")
+ 
+ 
+ def pytest_collection_modifyitems(config, items):
+ 
+-    # run gui tests --gui option is proveded
+-    if config.getoption("--gui"):
++    # run gui tests --tgui option is proveded
++    if config.getoption("--tgui"):
+         return
+ 
+     # skip gui tests otherwise
+-    skip_gui = pytest.mark.skip(reason="need --gui option to run")
++    skip_gui = pytest.mark.skip(reason="need --tgui option to run")
+     for item in items:
+-        if "gui" in item.keywords:
++        if "tgui" in item.keywords:
+             item.add_marker(skip_gui)

@@ -1,5 +1,5 @@
 pkgname=python-cadquery
-pkgver=v2.5.2.r27
+pkgver=v2.6.0
 pkgrel=1
 pkgdesc="A parametric CAD scripting framework based on PythonOCC"
 arch=(any)
@@ -11,20 +11,19 @@ python-ocp
 python-ezdxf
 nlopt
 python-typish
-python-nptyping
 python-multimethod
 python-docutils
 python-pyparsing
+python-trame
+python-trame-vtk
 casadi
-openmpi
-python-path
 openblas
-libxcursor
 )
 checkdepends=(
 python-pytest
 python-typing_extensions
 python-docutils
+python-mycdp
 ttf-liberation
 )
 makedepends=(
@@ -35,10 +34,18 @@ python-installer
 python-wheel
 )
 
-_fragment="#commit=0006f90040eefa958d8b5448a4e3587ee6244680"
-source=("git+https://github.com/CadQuery/cadquery#commit=${_fragment}")
+_fragment="#commit=18b15d6d86f202308bfc10a5d34cc0fc3f48bb6e"
+source=(
+"git+https://github.com/CadQuery/cadquery#commit=${_fragment}"
+occt79.patch  # curl https://github.com/CadQuery/cadquery/commit/7cf644e75d41bb4ba6667a6ec81befe22b9dd254.patch > occt79.patch
+use-pathlib.patch  # curl https://github.com/CadQuery/cadquery/commit/3bc82aa37547f355f4360dcf8eb3422cf529f098.patch > use-pathlib.patch
+fix-gui-test.patch  # curl https://github.com/CadQuery/cadquery/compare/v2.6.0...greyltc:cadquery:fix-gui-test.patch > fix-gui-test.patch
+)
 
-sha256sums=('c2a99dbbe752cb0316692581c4ccac4ff37ad9440976710f28243f4caf777fd0')
+sha256sums=('865af5ac3bcc74a2249d194c6db70651fdc1f2a5310553539914d77396333f39'
+            '4d60cee6bf70d5eeaeb060e514d104969c1da7f30e7f4eb6d67c061e0debaa05'
+            '5c1c16d30303015cb7d8b4d52664061473ac05f5915ce3e31988654db3abf4ae'
+            '5bce824f9eb3b2defdea8600f8153c17be619abf7117013b5748402787751b7b')
 
 pkgver() {
   cd cadquery
@@ -46,7 +53,9 @@ pkgver() {
 }
 
 prepare() {
-  cd cadquery
+  patch -p1 -d cadquery < occt79.patch
+  patch -p1 -d cadquery < use-pathlib.patch
+  patch -p1 -d cadquery < fix-gui-test.patch
 }
 
 build() {
@@ -64,7 +73,7 @@ check() {
   testText
   )
   printf -v _joined '%s and not ' "${_these_fail[@]}"
-  python -m pytest cadquery/tests -k "$(echo "not ${_joined% and not }")"  # skip the tests we know fail
+  python -m pytest -v cadquery/tests -p no:seleniumbase -k "$(echo "not ${_joined% and not }")"  # skip the tests we know fail
 
   deactivate
 }

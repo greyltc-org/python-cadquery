@@ -1,0 +1,1970 @@
+From 3bc82aa37547f355f4360dcf8eb3422cf529f098 Mon Sep 17 00:00:00 2001
+From: "M. Greyson Christoforo" <grey@christoforo.net>
+Date: Tue, 7 Oct 2025 10:13:18 +0100
+Subject: [PATCH] use Path from pathlib everywhere. drop path dep
+
+---
+ cadquery/assembly.py                    |  22 +--
+ cadquery/cq.py                          |   3 +-
+ cadquery/occ_impl/exporters/__init__.py |  12 +-
+ cadquery/occ_impl/exporters/assembly.py |  49 +++----
+ cadquery/occ_impl/exporters/dxf.py      |   3 +-
+ cadquery/occ_impl/exporters/vtk.py      |   5 +-
+ cadquery/occ_impl/importers/__init__.py |  13 +-
+ cadquery/occ_impl/importers/assembly.py |  20 +--
+ cadquery/occ_impl/importers/dxf.py      |   3 +-
+ cadquery/occ_impl/shapes.py             |  37 +++---
+ cadquery/sketch.py                      |   5 +-
+ cadquery/vis.py                         |   6 +-
+ setup.py                                |   1 -
+ tests/test_assembly.py                  | 169 +++++++++++++-----------
+ tests/test_cadquery.py                  |  26 ++--
+ tests/test_examples.py                  |   2 +-
+ tests/test_exporters.py                 | 145 ++++++++++----------
+ tests/test_free_functions.py            |   7 +-
+ tests/test_importers.py                 |  50 +++----
+ tests/test_selectors.py                 |   1 -
+ tests/test_sketch.py                    |  11 +-
+ tests/test_vis.py                       |   6 +-
+ 22 files changed, 320 insertions(+), 276 deletions(-)
+
+diff --git a/cadquery/assembly.py b/cadquery/assembly.py
+index 65c024702..d2adb5c46 100644
+--- a/cadquery/assembly.py
++++ b/cadquery/assembly.py
+@@ -15,6 +15,7 @@
+ from typish import instance_of
+ from uuid import uuid1 as uuid
+ from warnings import warn
++from pathlib import Path
+ 
+ from .cq import Workplane
+ from .occ_impl.shapes import Shape, Compound, isSubshape
+@@ -47,6 +48,7 @@
+ 
+ PATH_DELIM = "/"
+ 
++
+ # entity selector grammar definition
+ def _define_grammar():
+ 
+@@ -507,7 +509,7 @@ def solve(self, verbosity: int = 0) -> Self:
+     @deprecate()
+     def save(
+         self,
+-        path: str,
++        path: Path,
+         exportType: Optional[ExportLiterals] = None,
+         mode: STEPExportModeLiterals = "default",
+         tolerance: float = 0.1,
+@@ -534,7 +536,7 @@ def save(
+ 
+     def export(
+         self,
+-        path: str,
++        path: Path,
+         exportType: Optional[ExportLiterals] = None,
+         mode: STEPExportModeLiterals = "default",
+         tolerance: float = 0.1,
+@@ -560,7 +562,7 @@ def export(
+             raise ValueError(f"Unknown assembly export mode {mode} for STEP")
+ 
+         if exportType is None:
+-            t = path.split(".")[-1].upper()
++            t = path.suffix.upper().lstrip(".")
+             if t in ("STEP", "XML", "XBF", "VRML", "VTKJS", "GLTF", "GLB", "STL"):
+                 exportType = cast(ExportLiterals, t)
+             else:
+@@ -591,7 +593,7 @@ def export(
+         return self
+ 
+     @classmethod
+-    def importStep(cls, path: str) -> Self:
++    def importStep(cls, path: Path) -> Self:
+         """
+         Reads an assembly from a STEP file.
+ 
+@@ -602,13 +604,13 @@ def importStep(cls, path: str) -> Self:
+         return cls.load(path, importType="STEP")
+ 
+     @classmethod
+-    def load(cls, path: str, importType: Optional[ImportLiterals] = None,) -> Self:
++    def load(cls, path: Path, importType: Optional[ImportLiterals] = None,) -> Self:
+         """
+         Load step, xbf or xml.
+         """
+ 
+         if importType is None:
+-            t = path.split(".")[-1].upper()
++            t = path.suffix.upper().lstrip(".")
+             if t in ("STEP", "XML", "XBF"):
+                 importType = cast(ImportLiterals, t)
+             else:
+@@ -680,8 +682,12 @@ def __iter__(
+         color = self.color if self.color else color
+ 
+         if self.obj:
+-            yield self.obj if isinstance(self.obj, Shape) else Compound.makeCompound(
+-                s for s in self.obj.vals() if isinstance(s, Shape)
++            yield (
++                self.obj
++                if isinstance(self.obj, Shape)
++                else Compound.makeCompound(
++                    s for s in self.obj.vals() if isinstance(s, Shape)
++                )
+             ), name, loc, color
+ 
+         for ch in self.children:
+diff --git a/cadquery/cq.py b/cadquery/cq.py
+index 139892eb9..356b408c8 100644
+--- a/cadquery/cq.py
++++ b/cadquery/cq.py
+@@ -21,6 +21,7 @@
+ )
+ from typing_extensions import Literal
+ from inspect import Parameter, Signature
++from pathlib import Path
+ 
+ 
+ from .occ_impl.geom import Vector, Plane, Location
+@@ -4582,7 +4583,7 @@ def invoke(
+ 
+     def export(
+         self: T,
+-        fname: str,
++        fname: Path,
+         tolerance: float = 0.1,
+         angularTolerance: float = 0.1,
+         opt: Optional[Dict[str, Any]] = None,
+diff --git a/cadquery/occ_impl/exporters/__init__.py b/cadquery/occ_impl/exporters/__init__.py
+index 7f9eddadb..c3cf6b556 100644
+--- a/cadquery/occ_impl/exporters/__init__.py
++++ b/cadquery/occ_impl/exporters/__init__.py
+@@ -1,6 +1,7 @@
+ import tempfile
+ import os
+ import io as StringIO
++from pathlib import Path
+ 
+ from typing import IO, Optional, Union, cast, Dict, Any, Iterable
+ from typing_extensions import Literal
+@@ -39,13 +40,12 @@ class ExportTypes:
+ 
+ def export(
+     w: Union[Shape, Iterable[Shape]],
+-    fname: str,
++    fname: Path,
+     exportType: Optional[ExportLiterals] = None,
+     tolerance: float = 0.1,
+     angularTolerance: float = 0.1,
+     opt: Optional[Dict[str, Any]] = None,
+ ):
+-
+     """
+     Export Workplane or Shape to file. Multiple entities are converted to compound.
+ 
+@@ -69,7 +69,7 @@ def export(
+         shape = compound(*w)
+ 
+     if exportType is None:
+-        t = fname.split(".")[-1].upper()
++        t = fname.suffix.upper().lstrip(".")
+         if t in ExportTypes.__dict__.values():
+             exportType = cast(ExportLiterals, t)
+         else:
+@@ -121,7 +121,7 @@ def export(
+ 
+     elif exportType == ExportTypes.VRML:
+         shape.mesh(tolerance, angularTolerance)
+-        VrmlAPI.Write_s(shape.wrapped, fname)
++        VrmlAPI.Write_s(shape.wrapped, str(fname))
+ 
+     elif exportType == ExportTypes.VTP:
+         exportVTP(shape, fname, tolerance, angularTolerance)
+@@ -205,9 +205,9 @@ def tessellate(shape, angularTolerance):
+         os.close(h)
+ 
+         if exportType == ExportTypes.STEP:
+-            shape.exportStep(outFileName)
++            shape.exportStep(Path(outFileName))
+         elif exportType == ExportTypes.STL:
+-            shape.exportStl(outFileName, tolerance, angularTolerance, True)
++            shape.exportStl(Path(outFileName), tolerance, angularTolerance, True)
+         else:
+             raise ValueError("No idea how i got here")
+ 
+diff --git a/cadquery/occ_impl/exporters/assembly.py b/cadquery/occ_impl/exporters/assembly.py
+index 4d34342cf..227d16b20 100644
+--- a/cadquery/occ_impl/exporters/assembly.py
++++ b/cadquery/occ_impl/exporters/assembly.py
+@@ -1,10 +1,10 @@
+-import os.path
+ import uuid
+ 
+ from tempfile import TemporaryDirectory
+ from shutil import make_archive
+ from typing import Optional
+ from typing_extensions import Literal
++from pathlib import Path
+ 
+ from vtkmodules.vtkIOExport import vtkJSONSceneExporter, vtkVRMLExporter
+ from vtkmodules.vtkRenderingCore import vtkRenderWindow
+@@ -50,7 +50,7 @@ class ExportModes:
+ 
+ def exportAssembly(
+     assy: AssemblyProtocol,
+-    path: str,
++    path: Path,
+     mode: STEPExportModeLiterals = "default",
+     **kwargs,
+ ) -> bool:
+@@ -102,14 +102,14 @@ def exportAssembly(
+     Interface_Static.SetIVal_s("write.stepcaf.subshapes.name", 1)
+     writer.Transfer(doc, STEPControl_StepModelType.STEPControl_AsIs)
+ 
+-    status = writer.Write(path)
++    status = writer.Write(str(path))
+ 
+     return status == IFSelect_ReturnStatus.IFSelect_RetDone
+ 
+ 
+ def exportStepMeta(
+     assy: AssemblyProtocol,
+-    path: str,
++    path: Path,
+     write_pcurves: bool = True,
+     precision_mode: int = 0,
+ ) -> bool:
+@@ -161,10 +161,12 @@ def _process_child(child: AssemblyProtocol, assy_label: TDF_Label):
+         # Collect all of the shapes in the child object
+         if child.obj:
+             child_items = (
+-                child.obj
+-                if isinstance(child.obj, Shape)
+-                else Compound.makeCompound(
+-                    s for s in child.obj.vals() if isinstance(s, Shape)
++                (
++                    child.obj
++                    if isinstance(child.obj, Shape)
++                    else Compound.makeCompound(
++                        s for s in child.obj.vals() if isinstance(s, Shape)
++                    )
+                 ),
+                 child.name,
+                 child.loc,
+@@ -268,19 +270,20 @@ def _process_assembly(
+     Interface_Static.SetIVal_s("write.precision.mode", precision_mode)
+     writer.Transfer(doc, STEPControl_StepModelType.STEPControl_AsIs)
+ 
+-    status = writer.Write(path)
++    status = writer.Write(str(path))
+ 
+     return status == IFSelect_ReturnStatus.IFSelect_RetDone
+ 
+ 
+-def exportCAF(assy: AssemblyProtocol, path: str, binary: bool = False) -> bool:
++def exportCAF(assy: AssemblyProtocol, path: Path, binary: bool = False) -> bool:
+     """
+     Export an assembly to an XCAF xml or xbf file (internal OCCT formats).
+     """
+ 
+-    folder, fname = os.path.split(path)
+-    name, ext = os.path.splitext(fname)
+-    ext = ext[1:] if ext[0] == "." else ext
++    folder = path.parent
++    fname = path.name
++    name = path.stem
++    ext = path.suffix.lstrip(".")
+ 
+     _, doc = toCAF(assy, binary=binary)
+     app = XCAFApp_Application.GetApplication_s()
+@@ -308,10 +311,10 @@ def exportCAF(assy: AssemblyProtocol, path: str, binary: bool = False) -> bool:
+         format_name, format_desc, TCollection_AsciiString(ext), ret, store,
+     )
+ 
+-    doc.SetRequestedFolder(TCollection_ExtendedString(folder))
++    doc.SetRequestedFolder(TCollection_ExtendedString(str(folder)))
+     doc.SetRequestedName(TCollection_ExtendedString(name))
+ 
+-    status = app.SaveAs(doc, TCollection_ExtendedString(path))
++    status = app.SaveAs(doc, TCollection_ExtendedString(str(path)))
+ 
+     app.Close(doc)
+ 
+@@ -335,7 +338,7 @@ def _vtkRenderWindow(
+     return renderWindow
+ 
+ 
+-def exportVTKJS(assy: AssemblyProtocol, path: str):
++def exportVTKJS(assy: AssemblyProtocol, path: Path):
+     """
+     Export an assembly to a zipped vtkjs. NB: .zip extensions is added to path.
+     """
+@@ -348,12 +351,12 @@ def exportVTKJS(assy: AssemblyProtocol, path: str):
+         exporter.SetFileName(tmpdir)
+         exporter.SetRenderWindow(renderWindow)
+         exporter.Write()
+-        make_archive(path, "zip", tmpdir)
++        make_archive(str(path), "zip", tmpdir)
+ 
+ 
+ def exportVRML(
+     assy: AssemblyProtocol,
+-    path: str,
++    path: Path,
+     tolerance: float = 1e-3,
+     angularTolerance: float = 0.1,
+ ):
+@@ -362,14 +365,14 @@ def exportVRML(
+     """
+ 
+     exporter = vtkVRMLExporter()
+-    exporter.SetFileName(path)
++    exporter.SetFileName(str(path))
+     exporter.SetRenderWindow(_vtkRenderWindow(assy, tolerance, angularTolerance))
+     exporter.Write()
+ 
+ 
+ def exportGLTF(
+     assy: AssemblyProtocol,
+-    path: str,
++    path: Path,
+     binary: Optional[bool] = None,
+     tolerance: float = 1e-3,
+     angularTolerance: float = 0.1,
+@@ -382,10 +385,10 @@ def exportGLTF(
+     if binary is None:
+         # Handle the binary option for GLTF export based on file extension
+         binary = True
+-        path_parts = path.split(".")
++        sfx = path.suffix.lstrip(".").lower()
+ 
+         # Binary will be the default if the user specified a non-standard file extension
+-        if len(path_parts) > 0 and path_parts[-1] == "gltf":
++        if sfx == "gltf":
+             binary = False
+ 
+     # map from CadQuery's right-handed +Z up coordinate system to glTF's right-handed +Y up coordinate system
+@@ -395,7 +398,7 @@ def exportGLTF(
+ 
+     _, doc = toCAF(assy, True, True, tolerance, angularTolerance)
+ 
+-    writer = RWGltf_CafWriter(TCollection_AsciiString(path), binary)
++    writer = RWGltf_CafWriter(TCollection_AsciiString(str(path)), binary)
+     result = writer.Perform(
+         doc, TColStd_IndexedDataMapOfStringString(), Message_ProgressRange()
+     )
+diff --git a/cadquery/occ_impl/exporters/dxf.py b/cadquery/occ_impl/exporters/dxf.py
+index 558d6e235..75e1463ae 100644
+--- a/cadquery/occ_impl/exporters/dxf.py
++++ b/cadquery/occ_impl/exporters/dxf.py
+@@ -20,6 +20,7 @@
+ from OCP.gp import gp_Dir
+ from OCP.GC import GC_MakeArcOfEllipse
+ from typing_extensions import Self
++from pathlib import Path
+ 
+ from ...units import RAD2DEG
+ from ..shapes import Face, Edge, Shape, Compound, compound
+@@ -366,7 +367,7 @@ def _dxf_spline(cls, edge: Edge, plane: Plane) -> DxfEntityAttributes:
+ 
+ def exportDXF(
+     w: Union[WorkplaneLike, Shape, Iterable[Shape]],
+-    fname: str,
++    fname: Path,
+     approx: Optional[ApproxOptions] = None,
+     tolerance: float = 1e-3,
+     *,
+diff --git a/cadquery/occ_impl/exporters/vtk.py b/cadquery/occ_impl/exporters/vtk.py
+index d13133c80..f451a8436 100644
+--- a/cadquery/occ_impl/exporters/vtk.py
++++ b/cadquery/occ_impl/exporters/vtk.py
+@@ -1,13 +1,14 @@
+ from vtkmodules.vtkIOXML import vtkXMLPolyDataWriter
+ from ..shapes import Shape
++from pathlib import Path
+ 
+ 
+ def exportVTP(
+-    shape: Shape, fname: str, tolerance: float = 0.1, angularTolerance: float = 0.1
++    shape: Shape, fname: Path, tolerance: float = 0.1, angularTolerance: float = 0.1
+ ):
+ 
+     writer = vtkXMLPolyDataWriter()
+-    writer.SetFileName(fname)
++    writer.SetFileName(str(fname))
+     writer.SetInputData(shape.toVtkPolyData(tolerance, angularTolerance))
+     writer.Write()
+ 
+diff --git a/cadquery/occ_impl/importers/__init__.py b/cadquery/occ_impl/importers/__init__.py
+index 544fe1eeb..54347d5c7 100644
+--- a/cadquery/occ_impl/importers/__init__.py
++++ b/cadquery/occ_impl/importers/__init__.py
+@@ -1,5 +1,6 @@
+ from math import pi
+ from typing import List, Literal
++from pathlib import Path
+ 
+ import OCP.IFSelect
+ from OCP.STEPControl import STEPControl_Reader
+@@ -24,7 +25,7 @@ class UNITS:
+ 
+ 
+ def importShape(
+-    importType: Literal["STEP", "DXF", "BREP", "BIN"], fileName: str, *args, **kwargs
++    importType: Literal["STEP", "DXF", "BREP", "BIN"], fileName: Path, *args, **kwargs
+ ) -> "cq.Workplane":
+     """
+     Imports a file based on the type (STEP, STL, etc)
+@@ -46,7 +47,7 @@ def importShape(
+         raise RuntimeError("Unsupported import type: {!r}".format(importType))
+ 
+ 
+-def importBrep(fileName: str) -> "cq.Workplane":
++def importBrep(fileName: Path) -> "cq.Workplane":
+     """
+     Loads the BREP file as a single shape into a cadquery Workplane.
+ 
+@@ -63,7 +64,7 @@ def importBrep(fileName: str) -> "cq.Workplane":
+     return cq.Workplane("XY").newObject([shape])
+ 
+ 
+-def importBin(fileName: str) -> "cq.Workplane":
++def importBin(fileName: Path) -> "cq.Workplane":
+     """
+     Loads the binary BREP file as a single shape into a cadquery Workplane.
+ 
+@@ -76,7 +77,7 @@ def importBin(fileName: str) -> "cq.Workplane":
+ 
+ 
+ # Loads a STEP file into a CQ.Workplane object
+-def importStep(fileName: str) -> "cq.Workplane":
++def importStep(fileName: Path) -> "cq.Workplane":
+     """
+     Accepts a file name and loads the STEP file into a cadquery Workplane
+ 
+@@ -85,7 +86,7 @@ def importStep(fileName: str) -> "cq.Workplane":
+ 
+     # Now read and return the shape
+     reader = STEPControl_Reader()
+-    readStatus = reader.ReadFile(fileName)
++    readStatus = reader.ReadFile(str(fileName))
+     if readStatus != OCP.IFSelect.IFSelect_RetDone:
+         raise ValueError("STEP File could not be loaded")
+     for i in range(reader.NbRootsForTransfer()):
+@@ -104,7 +105,7 @@ def importStep(fileName: str) -> "cq.Workplane":
+ 
+ 
+ def importDXF(
+-    filename: str, tol: float = 1e-6, exclude: List[str] = [], include: List[str] = []
++    filename: Path, tol: float = 1e-6, exclude: List[str] = [], include: List[str] = []
+ ) -> "cq.Workplane":
+     """
+     Loads a DXF file into a Workplane.
+diff --git a/cadquery/occ_impl/importers/assembly.py b/cadquery/occ_impl/importers/assembly.py
+index 1ae810e60..218b1c951 100644
+--- a/cadquery/occ_impl/importers/assembly.py
++++ b/cadquery/occ_impl/importers/assembly.py
+@@ -1,5 +1,5 @@
+ from typing import cast
+-from path import Path
++from pathlib import Path
+ 
+ from OCP.TopoDS import TopoDS_Shape
+ from OCP.TCollection import TCollection_ExtendedString
+@@ -96,7 +96,7 @@ def _get_shape_color(s: TopoDS_Shape, color_tool: XCAFDoc_ColorTool) -> Color |
+     return rv
+ 
+ 
+-def importStep(assy: AssemblyProtocol, path: str):
++def importStep(assy: AssemblyProtocol, path: Path):
+     """
+     Import a step file into an assembly.
+ 
+@@ -116,7 +116,7 @@ def importStep(assy: AssemblyProtocol, path: str):
+     Interface_Static.SetIVal_s("read.stepcaf.subshapes.name", 1)
+ 
+     # Read the STEP file
+-    status = step_reader.ReadFile(path)
++    status = step_reader.ReadFile(str(path))
+     if status != IFSelect_RetDone:
+         raise ValueError(f"Error reading STEP file: {path}")
+ 
+@@ -129,7 +129,7 @@ def importStep(assy: AssemblyProtocol, path: str):
+     _importDoc(doc, assy)
+ 
+ 
+-def importXbf(assy: AssemblyProtocol, path: str):
++def importXbf(assy: AssemblyProtocol, path: Path):
+     """
+     Import an xbf file into an assembly.
+ 
+@@ -142,11 +142,12 @@ def importXbf(assy: AssemblyProtocol, path: str):
+     app = TDocStd_Application()
+     BinXCAFDrivers.DefineFormat_s(app)
+ 
+-    dirname, fname = Path(path).absolute().splitpath()
++    dirname = path.absolute().parent
++    fname = path.absolute().name
+     doc = cast(
+         TDocStd_Document,
+         app.Retrieve(
+-            TCollection_ExtendedString(dirname), TCollection_ExtendedString(fname)
++            TCollection_ExtendedString(str(dirname)), TCollection_ExtendedString(fname)
+         ),
+     )
+ 
+@@ -158,7 +159,7 @@ def importXbf(assy: AssemblyProtocol, path: str):
+     _importDoc(doc, assy)
+ 
+ 
+-def importXml(assy: AssemblyProtocol, path: str):
++def importXml(assy: AssemblyProtocol, path: Path):
+     """
+     Import an xcaf xml file into an assembly.
+ 
+@@ -171,11 +172,12 @@ def importXml(assy: AssemblyProtocol, path: str):
+     app = TDocStd_Application()
+     XmlXCAFDrivers.DefineFormat_s(app)
+ 
+-    dirname, fname = Path(path).absolute().splitpath()
++    dirname = path.absolute().parent
++    fname = path.absolute().name
+     doc = cast(
+         TDocStd_Document,
+         app.Retrieve(
+-            TCollection_ExtendedString(dirname), TCollection_ExtendedString(fname)
++            TCollection_ExtendedString(str(dirname)), TCollection_ExtendedString(fname)
+         ),
+     )
+ 
+diff --git a/cadquery/occ_impl/importers/dxf.py b/cadquery/occ_impl/importers/dxf.py
+index a6c5093d4..8e17cd171 100644
+--- a/cadquery/occ_impl/importers/dxf.py
++++ b/cadquery/occ_impl/importers/dxf.py
+@@ -1,6 +1,7 @@
+ from collections import OrderedDict
+ from math import pi
+ from typing import List
++from pathlib import Path
+ 
+ from ... import cq
+ from ..geom import Vector
+@@ -159,7 +160,7 @@ def _dxf_convert(elements, tol):
+ 
+ 
+ def _importDXF(
+-    filename: str, tol: float = 1e-6, exclude: List[str] = [], include: List[str] = [],
++    filename: Path, tol: float = 1e-6, exclude: List[str] = [], include: List[str] = [],
+ ) -> List[Face]:
+     """
+     Loads a DXF file into a list of faces.
+diff --git a/cadquery/occ_impl/shapes.py b/cadquery/occ_impl/shapes.py
+index 9abfd7ad7..64bc82cd7 100644
+--- a/cadquery/occ_impl/shapes.py
++++ b/cadquery/occ_impl/shapes.py
+@@ -18,7 +18,7 @@
+ from typing_extensions import Self
+ 
+ from io import BytesIO
+-
++from pathlib import Path
+ 
+ from vtkmodules.vtkCommonDataModel import vtkPolyData
+ from vtkmodules.vtkFiltersCore import vtkTriangleFilter, vtkPolyDataNormals
+@@ -478,7 +478,7 @@ def cast(cls, obj: TopoDS_Shape, forConstruction: bool = False) -> "Shape":
+ 
+     def exportStl(
+         self,
+-        fileName: str,
++        fileName: Path,
+         tolerance: float = 1e-3,
+         angularTolerance: float = 0.1,
+         ascii: bool = False,
+@@ -507,9 +507,9 @@ def exportStl(
+         writer = StlAPI_Writer()
+         writer.ASCIIMode = ascii
+ 
+-        return writer.Write(self.wrapped, fileName)
++        return writer.Write(self.wrapped, str(fileName))
+ 
+-    def exportStep(self, fileName: str, **kwargs) -> IFSelect_ReturnStatus:
++    def exportStep(self, fileName: Path, **kwargs) -> IFSelect_ReturnStatus:
+         """
+         Export this shape to a STEP file.
+ 
+@@ -536,49 +536,56 @@ def exportStep(self, fileName: str, **kwargs) -> IFSelect_ReturnStatus:
+         Interface_Static.SetIVal_s("write.precision.mode", precision_mode)
+         writer.Transfer(self.wrapped, STEPControl_AsIs)
+ 
+-        return writer.Write(fileName)
++        return writer.Write(str(fileName))
+ 
+-    def exportBrep(self, f: Union[str, BytesIO]) -> bool:
++    def exportBrep(self, f: Union[Path, BytesIO]) -> bool:
+         """
+         Export this shape to a BREP file
+         """
+ 
+-        rv = BRepTools.Write_s(self.wrapped, f)
++        if isinstance(f, Path):
++            f = str(f)  # type: ignore
++        rv = BRepTools.Write_s(self.wrapped, tcast(Union[str, BytesIO], f))
+ 
+         return True if rv is None else rv
+ 
+     @classmethod
+-    def importBrep(cls, f: Union[str, BytesIO]) -> "Shape":
++    def importBrep(cls, f: Union[Path, BytesIO]) -> "Shape":
+         """
+         Import shape from a BREP file
+         """
+         s = TopoDS_Shape()
+         builder = BRep_Builder()
+ 
+-        BRepTools.Read_s(s, f, builder)
++        if isinstance(f, Path):
++            f = str(f)  # type: ignore
++        BRepTools.Read_s(s, tcast(Union[str, BytesIO], f), builder)
+ 
+         if s.IsNull():
+             raise ValueError(f"Could not import {f}")
+ 
+         return cls.cast(s)
+ 
+-    def exportBin(self, f: Union[str, BytesIO]) -> bool:
++    def exportBin(self, f: Union[Path, BytesIO]) -> bool:
+         """
+         Export this shape to a binary BREP file.
+         """
+-
+-        rv = BinTools.Write_s(self.wrapped, f)
++        if isinstance(f, Path):
++            f = str(f)  # type: ignore
++        rv = BinTools.Write_s(self.wrapped, tcast(Union[str, BytesIO], f))
+ 
+         return True if rv is None else rv
+ 
+     @classmethod
+-    def importBin(cls, f: Union[str, BytesIO]) -> "Shape":
++    def importBin(cls, f: Union[Path, BytesIO]) -> "Shape":
+         """
+         Import shape from a binary BREP file.
+         """
+         s = TopoDS_Shape()
+ 
+-        BinTools.Read_s(s, f)
++        if isinstance(f, Path):
++            f = str(f)  # type: ignore
++        BinTools.Read_s(s, tcast(Union[str, BytesIO], f))
+ 
+         return cls.cast(s)
+ 
+@@ -1702,7 +1709,7 @@ def __truediv__(self, other: "Shape") -> "Shape":
+ 
+     def export(
+         self: T,
+-        fname: str,
++        fname: Path,
+         tolerance: float = 0.1,
+         angularTolerance: float = 0.1,
+         opt: Optional[Dict[str, Any]] = None,
+diff --git a/cadquery/sketch.py b/cadquery/sketch.py
+index f76c90dc3..3e91360fb 100644
+--- a/cadquery/sketch.py
++++ b/cadquery/sketch.py
+@@ -19,6 +19,7 @@
+ from itertools import product, chain
+ from multimethod import multimethod
+ from typish import instance_of, get_type
++from pathlib import Path
+ 
+ from .hull import find_hull
+ from .selectors import StringSyntaxSelector, Selector
+@@ -220,7 +221,7 @@ def face(
+ 
+     def importDXF(
+         self: T,
+-        filename: str,
++        filename: Path,
+         tol: float = 1e-6,
+         exclude: List[str] = [],
+         include: List[str] = [],
+@@ -1325,7 +1326,7 @@ def invoke(
+ 
+     def export(
+         self: T,
+-        fname: str,
++        fname: Path,
+         tolerance: float = 0.1,
+         angularTolerance: float = 0.1,
+         opt: Optional[Dict[str, Any]] = None,
+diff --git a/cadquery/vis.py b/cadquery/vis.py
+index fb644386d..7602613e6 100644
+--- a/cadquery/vis.py
++++ b/cadquery/vis.py
+@@ -16,6 +16,8 @@
+ 
+ from typish import instance_of
+ 
++from pathlib import Path
++
+ from OCP.TopoDS import TopoDS_Shape
+ from OCP.Geom import Geom_BSplineSurface
+ 
+@@ -393,7 +395,7 @@ def show(
+     edges: bool = False,
+     specular: bool = True,
+     title: str = "CQ viewer",
+-    screenshot: Optional[str] = None,
++    screenshot: Optional[Path] = None,
+     interact: bool = True,
+     zoom: float = 1.0,
+     roll: float = -35,
+@@ -541,7 +543,7 @@ def show(
+         win2image.Update()
+ 
+         writer = vtkPNGWriter()
+-        writer.SetFileName(screenshot)
++        writer.SetFileName(str(screenshot))
+         writer.SetInputConnection(win2image.GetOutputPort())
+         writer.Write()
+ 
+diff --git a/setup.py b/setup.py
+index 0101bb34b..6babac8c7 100644
+--- a/setup.py
++++ b/setup.py
+@@ -32,7 +32,6 @@
+         "nlopt>=2.9.0,<3.0",
+         "typish",
+         "casadi",
+-        "path",
+         "trame",
+         "trame-vtk",
+     ]
+diff --git a/tests/test_assembly.py b/tests/test_assembly.py
+index 4e73b518d..0990a008b 100644
+--- a/tests/test_assembly.py
++++ b/tests/test_assembly.py
+@@ -1,10 +1,8 @@
+ import pytest
+-import os
+ from itertools import product
+ from math import degrees
+ import copy
+-from path import Path
+-from pathlib import PurePath
++from pathlib import PurePath, Path
+ import re
+ from pytest import approx
+ 
+@@ -40,7 +38,7 @@
+ 
+ @pytest.fixture(scope="function")
+ def tmpdir(tmp_path_factory):
+-    return Path(tmp_path_factory.mktemp("assembly"))
++    return tmp_path_factory.mktemp("assembly")
+ 
+ 
+ @pytest.fixture
+@@ -683,8 +681,8 @@ def test_assy_root_name(assy_fixture, root_name, request):
+ def test_step_export(nested_assy, tmp_path_factory):
+     # Use a temporary directory
+     tmpdir = tmp_path_factory.mktemp("out")
+-    nested_path = os.path.join(tmpdir, "nested.step")
+-    nested_options_path = os.path.join(tmpdir, "nested_options.step")
++    nested_path = tmpdir / "nested.step"
++    nested_options_path = tmpdir / "nested_options.step"
+ 
+     exportAssembly(nested_assy, nested_path)
+     exportAssembly(
+@@ -711,7 +709,7 @@ def test_meta_step_export(tmp_path_factory):
+ 
+     # Use a temporary directory
+     tmpdir = tmp_path_factory.mktemp("out")
+-    meta_path = os.path.join(tmpdir, "meta.step")
++    meta_path = tmpdir / "meta.step"
+ 
+     # Most nested level of the assembly
+     subsubassy = cq.Assembly(name="third-level")
+@@ -793,7 +791,7 @@ def test_meta_step_export(tmp_path_factory):
+     assert success
+ 
+     # Make sure the step file exists
+-    assert os.path.exists(meta_path)
++    assert Path(meta_path).exists()
+ 
+     # Read the contents as a step file as a string so we can check the outputs
+     with open(meta_path, "r") as f:
+@@ -826,7 +824,7 @@ def test_meta_step_export_edge_cases(tmp_path_factory):
+ 
+     # Use a temporary directory
+     tmpdir = tmp_path_factory.mktemp("out")
+-    meta_path = os.path.join(tmpdir, "meta_edges_cases.step")
++    meta_path = tmpdir / "meta_edges_cases.step"
+ 
+     # Create an assembly where the child is empty
+     assy = cq.Assembly(name="top-level")
+@@ -880,7 +878,7 @@ def test_assembly_step_import(tmp_path_factory, subshape_assy):
+ 
+     # Use a temporary directory
+     tmpdir = tmp_path_factory.mktemp("out")
+-    assy_step_path = os.path.join(tmpdir, "assembly_with_subshapes.step")
++    assy_step_path = tmpdir / "assembly_with_subshapes.step"
+ 
+     subshape_assy.export(assy_step_path)
+ 
+@@ -916,7 +914,7 @@ def test_assembly_step_import(tmp_path_factory, subshape_assy):
+     assert imported_assy.name == "top_level"
+ 
+     # Test a STEP file that does not contain an assembly
+-    wp_step_path = os.path.join(tmpdir, "plain_workplane.step")
++    wp_step_path = tmpdir / "plain_workplane.step"
+     res = cq.Workplane().box(10, 10, 10)
+     res.export(wp_step_path)
+ 
+@@ -932,7 +930,7 @@ def test_assembly_subshape_import(tmp_path_factory, subshape_assy, kind):
+     """
+ 
+     tmpdir = tmp_path_factory.mktemp("out")
+-    assy_step_path = os.path.join(tmpdir, f"subshape_assy.{kind}")
++    assy_step_path = tmpdir / f"subshape_assy.{kind}"
+ 
+     # Export the assembly
+     subshape_assy.export(assy_step_path)
+@@ -970,7 +968,7 @@ def test_assembly_multi_subshape_import(tmp_path_factory, multi_subshape_assy, k
+     """
+ 
+     tmpdir = tmp_path_factory.mktemp("out")
+-    assy_step_path = os.path.join(tmpdir, f"multi_subshape_assy.{kind}")
++    assy_step_path = tmpdir / f"multi_subshape_assy.{kind}"
+ 
+     # Export the assembly
+     multi_subshape_assy.export(assy_step_path)
+@@ -1017,7 +1015,7 @@ def test_bad_step_file_import(tmp_path_factory):
+     """
+ 
+     tmpdir = tmp_path_factory.mktemp("out")
+-    bad_step_path = os.path.join(tmpdir, "bad_step.step")
++    bad_step_path = tmpdir / "bad_step.step"
+ 
+     # Check that an error is raised when trying to import a non-existent STEP file
+     with pytest.raises(ValueError):
+@@ -1031,7 +1029,7 @@ def test_plain_assembly_import(tmp_path_factory):
+     """
+ 
+     tmpdir = tmp_path_factory.mktemp("out")
+-    plain_step_path = os.path.join(tmpdir, "plain_assembly_step.step")
++    plain_step_path = tmpdir / "plain_assembly_step.step"
+ 
+     # Simple cubes
+     cube_1 = cq.Workplane().box(10, 10, 10)
+@@ -1100,7 +1098,7 @@ def test_copied_assembly_import(tmp_path_factory):
+ 
+     # prepare the model
+     def make_model(name: str, COPY: bool):
+-        name = os.path.join(tmpdir, name)
++        name = tmpdir / name
+ 
+         b = box(1, 1, 1)
+ 
+@@ -1123,11 +1121,11 @@ def make_model(name: str, COPY: bool):
+     make_model("test_assy.step", False)
+ 
+     # import the assy with copies
+-    assy_copy = Assembly.importStep(os.path.join(tmpdir, "test_assy_copy.step"))
++    assy_copy = Assembly.importStep(tmpdir / "test_assy_copy.step")
+     assert 5 == len(assy_copy.children)
+ 
+     # import the assy without copies
+-    assy_normal = Assembly.importStep(os.path.join(tmpdir, "test_assy.step"))
++    assy_normal = Assembly.importStep(tmpdir / "test_assy.step")
+     assert 5 == len(assy_normal.children)
+ 
+ 
+@@ -1137,7 +1135,7 @@ def test_nested_subassembly_step_import(tmp_path_factory):
+     """
+ 
+     tmpdir = tmp_path_factory.mktemp("out")
+-    nested_step_path = os.path.join(tmpdir, "plain_assembly_step.step")
++    nested_step_path = tmpdir / "plain_assembly_step.step"
+ 
+     # Create a simple assembly
+     assy = cq.Assembly()
+@@ -1176,7 +1174,7 @@ def test_assembly_step_import_roundtrip(assy_orig, kind, tmp_path_factory, reque
+ 
+     # Set up the temporary directory
+     tmpdir = tmp_path_factory.mktemp("out")
+-    round_trip_path = os.path.join(tmpdir, f"round_trip.{kind}")
++    round_trip_path = tmpdir / f"round_trip.{kind}"
+ 
+     # First export
+     assy_orig.export(round_trip_path)
+@@ -1226,11 +1224,11 @@ def test_assembly_step_import_roundtrip(assy_orig, kind, tmp_path_factory, reque
+     ],
+ )
+ def test_step_export_loc(assy_fixture, expected, request, tmpdir):
+-    stepfile = (Path(tmpdir) / assy_fixture).with_suffix(".step")
++    stepfile = tmpdir / f"{assy_fixture}.step"
+     if not stepfile.exists():
+         assy = request.getfixturevalue(assy_fixture)
+-        assy.save(str(stepfile))
+-    o = cq.importers.importStep(str(stepfile))
++        assy.save(stepfile)
++    o = cq.importers.importStep(stepfile)
+     assert o.solids().size() == expected["nsolids"]
+     c = cq.Compound.makeCompound(o.solids().vals()).Center()
+     assert pytest.approx(c.toTuple()) == expected["center"]
+@@ -1238,26 +1236,32 @@ def test_step_export_loc(assy_fixture, expected, request, tmpdir):
+ 
+ def test_native_export(simple_assy):
+ 
+-    exportCAF(simple_assy, "assy.xml")
++    file = Path("assy.xml")
++
++    exportCAF(simple_assy, file)
+ 
+     # only sanity check for now
+-    assert os.path.exists("assy.xml")
++    assert file.exists()
+ 
+ 
+ def test_vtkjs_export(nested_assy):
+ 
+-    exportVTKJS(nested_assy, "assy")
++    file = Path("asasy")
++
++    exportVTKJS(nested_assy, file)
+ 
+     # only sanity check for now
+-    assert os.path.exists("assy.zip")
++    assert file.with_suffix(".zip").exists()
+ 
+ 
+ def test_vrml_export(simple_assy):
+ 
+-    exportVRML(simple_assy, "assy.wrl")
++    file = Path("assy.wrl")
++
++    exportVRML(simple_assy, file)
+ 
+     # only sanity check for now
+-    assert os.path.exists("assy.wrl")
++    assert file.exists()
+ 
+ 
+ def test_toJSON(simple_assy, nested_assy, empty_top_assy):
+@@ -1284,9 +1288,9 @@ def test_toJSON(simple_assy, nested_assy, empty_top_assy):
+ )
+ def test_save(extension, args, nested_assy, nested_assy_sphere):
+ 
+-    filename = "nested." + extension
++    filename = Path("nested." + extension)
+     nested_assy.save(filename, *args)
+-    assert os.path.exists(filename)
++    assert filename.exists()
+ 
+ 
+ @pytest.mark.parametrize(
+@@ -1306,90 +1310,96 @@ def test_save(extension, args, nested_assy, nested_assy_sphere):
+         ("stl", ("STL",), {}),
+     ],
+ )
+-def test_export(extension, args, kwargs, tmpdir, nested_assy):
++def test_export(extension, args, kwargs, tmp_path, nested_assy):
+ 
+-    filename = "nested." + extension
++    filename = (tmp_path / "nested").with_suffix(f".{extension}")
+ 
+-    with tmpdir:
+-        nested_assy.export(filename, *args, **kwargs)
+-        assert os.path.exists(filename)
++    nested_assy.export(filename, *args, **kwargs)
++    assert filename.exists()
+ 
+ 
+-def test_export_vtkjs(tmpdir, nested_assy):
++def test_export_vtkjs(tmp_path, nested_assy):
+ 
+-    with tmpdir:
+-        nested_assy.export("nested.vtkjs")
+-        assert os.path.exists("nested.vtkjs.zip")
++    filename = tmp_path / "nested.vtkjs"
++
++    nested_assy.export(filename)
++    assert (filename.parent / (filename.name + ".zip")).exists()
+ 
+ 
+ def test_export_errors(nested_assy):
+ 
+     with pytest.raises(ValueError):
+-        nested_assy.export("nested.1234")
++        nested_assy.export(Path("nested.1234"))
+ 
+     with pytest.raises(ValueError):
+-        nested_assy.export("nested.stl", "1234")
++        nested_assy.export(Path("nested.stl"), "1234")
+ 
+     with pytest.raises(ValueError):
+-        nested_assy.export("nested.step", mode="1234")
++        nested_assy.export(Path("nested.step"), mode="1234")
+ 
+ 
+ def test_save_stl_formats(nested_assy_sphere):
+ 
++    filename = Path("nested.stl")
++
+     # Binary export
+-    nested_assy_sphere.save("nested.stl", "STL", ascii=False)
+-    assert os.path.exists("nested.stl")
++    nested_assy_sphere.save(filename, "STL", ascii=False)
++    assert filename.exists()
+ 
+     # Trying to read a binary file as UTF-8/ASCII should throw an error
+     with pytest.raises(UnicodeDecodeError):
+-        with open("nested.stl", "r") as file:
++        with open(filename, "r") as file:
+             file.read()
+ 
+     # ASCII export
+-    nested_assy_sphere.save("nested_ascii.stl", ascii=True)
+-    assert os.path.exists("nested_ascii.stl")
+-    assert os.path.getsize("nested_ascii.stl") > 3960 * 1024
++    filename2 = Path("nested_ascii.stl")
++    nested_assy_sphere.save(filename2, ascii=True)
++    assert filename2.exists()
++    assert filename2.stat().st_size > 3960 * 1024
+ 
+ 
+ def test_save_gltf(nested_assy_sphere):
+ 
++    filename = Path("nested.glb")
++
+     # Binary export
+-    nested_assy_sphere.save("nested.glb")
+-    assert os.path.exists("nested.glb")
++    nested_assy_sphere.save(filename)
++    assert filename.exists()
+ 
+     # Trying to read a binary file as UTF-8/ASCII should throw an error
+     with pytest.raises(UnicodeDecodeError):
+-        with open("nested.glb", "r") as file:
++        with open(filename, "r") as file:
+             file.read()
+ 
+     # ASCII export
+-    nested_assy_sphere.save("nested_ascii.gltf")
+-    assert os.path.exists("nested_ascii.gltf")
+-    assert os.path.getsize("nested_ascii.gltf") > 5 * 1024
++    filename2 = Path("nested_ascii.gltf")
++    nested_assy_sphere.save(filename2)
++    assert filename2.exists()
++    assert filename2.stat().st_size > 5 * 1024
+ 
+ 
+ def test_exportGLTF(nested_assy_sphere):
+     """Tests the exportGLTF function directly for binary vs ascii export."""
+ 
++    filename = Path("nested_export_gltf.glb")
++
+     # Test binary export inferred from file extension
+-    cq.exporters.assembly.exportGLTF(nested_assy_sphere, "nested_export_gltf.glb")
++    cq.exporters.assembly.exportGLTF(nested_assy_sphere, filename)
+     with pytest.raises(UnicodeDecodeError):
+-        with open("nested_export_gltf.glb", "r") as file:
++        with open(filename, "r") as file:
+             file.read()
+ 
+     # Test explicit binary export
+-    cq.exporters.assembly.exportGLTF(
+-        nested_assy_sphere, "nested_export_gltf_2.glb", binary=True
+-    )
++    filename2 = Path("nested_export_gltf_2.glb")
++    cq.exporters.assembly.exportGLTF(nested_assy_sphere, filename2, binary=True)
+     with pytest.raises(UnicodeDecodeError):
+-        with open("nested_export_gltf_2.glb", "r") as file:
++        with open(filename2, "r") as file:
+             file.read()
+ 
+     # Test explicit ascii export
+-    cq.exporters.assembly.exportGLTF(
+-        nested_assy_sphere, "nested_export_gltf_3.gltf", binary=False
+-    )
+-    with open("nested_export_gltf_3.gltf", "r") as file:
++    filename3 = Path("nested_export_gltf_3.gltf")
++    cq.exporters.assembly.exportGLTF(nested_assy_sphere, filename3, binary=False)
++    with open(filename3, "r") as file:
+         lines = file.readlines()
+         assert lines[0].startswith('{"accessors"')
+ 
+@@ -1401,7 +1411,7 @@ def test_save_gltf_boxes2(boxes2_assy, tmpdir, capfd):
+     RWGltf_CafWriter skipped node '<name>' without triangulation data
+     """
+ 
+-    boxes2_assy.save(str(Path(tmpdir) / "boxes2_assy.glb"), "GLTF")
++    boxes2_assy.save(tmpdir / "boxes2_assy.glb", "GLTF")
+ 
+     output = capfd.readouterr()
+     assert output.out == ""
+@@ -1410,17 +1420,19 @@ def test_save_gltf_boxes2(boxes2_assy, tmpdir, capfd):
+ 
+ def test_save_vtkjs(nested_assy):
+ 
+-    nested_assy.save("nested", "VTKJS")
+-    assert os.path.exists("nested.zip")
++    filename = Path("nested")
++
++    nested_assy.save(filename, "VTKJS")
++    assert (filename.parent / (filename.name + ".zip")).exists()
+ 
+ 
+ def test_save_raises(nested_assy):
+ 
+     with pytest.raises(ValueError):
+-        nested_assy.save("nested.dxf")
++        nested_assy.save(Path("nested.dxf"))
+ 
+     with pytest.raises(ValueError):
+-        nested_assy.save("nested.step", "DXF")
++        nested_assy.save(Path("nested.step"), "DXF")
+ 
+ 
+ @pytest.mark.parametrize(
+@@ -1479,11 +1491,10 @@ def check_assy(assy, assy_i):
+     ["chassis0_assy", "boxes1_assy", "subshape_assy", "multi_subshape_assy"],
+ )
+ def test_colors_assy0(assy_fixture, request, tmpdir, kind):
+-    """Validate assembly roundtrip, checks colors, locs, names, subshapes.
+-    """
++    """Validate assembly roundtrip, checks colors, locs, names, subshapes."""
+ 
+     assy = request.getfixturevalue(assy_fixture)
+-    stepfile = (Path(tmpdir) / assy_fixture).with_suffix(f".{kind}")
++    stepfile = (tmpdir / assy_fixture).with_suffix(f".{kind}")
+     assy.export(stepfile)
+ 
+     assy_i = assy.load(stepfile)
+@@ -1515,7 +1526,7 @@ def test_colors_assy1(assy_fixture, request, tmpdir, kind):
+     """
+ 
+     assy = request.getfixturevalue(assy_fixture)
+-    stepfile = (Path(tmpdir) / assy_fixture).with_suffix(f".{kind}")
++    stepfile = (tmpdir / assy_fixture).with_suffix(f".{kind}")
+     assy.export(stepfile)
+ 
+     assy_i = assy.load(stepfile)
+@@ -1647,9 +1658,9 @@ def check_nodes(doc, expected):
+     check_nodes(doc, expected)
+ 
+     # repeat color check again - after STEP export round trip
+-    stepfile = (Path(tmpdir) / f"{assy_fixture}_fused").with_suffix(".step")
++    stepfile = tmpdir / f"{assy_fixture}_fused.step"
+     if not stepfile.exists():
+-        assy.save(str(stepfile), mode=cq.exporters.assembly.ExportModes.FUSED)
++        assy.save(stepfile, mode=cq.exporters.assembly.ExportModes.FUSED)
+     doc = read_step(stepfile)
+     check_nodes(doc, expected)
+ 
+@@ -2178,8 +2189,8 @@ def test_step_export_filesize(tmpdir):
+             assy.add(
+                 part, name=f"part{j}", loc=cq.Location(x=j * 1), color=copy.copy(color)
+             )
+-        stepfile = Path(tmpdir) / f"assy_step_filesize{i}.step"
+-        assy.export(str(stepfile))
++        stepfile = tmpdir / f"assy_step_filesize{i}.step"
++        assy.export(stepfile)
+         filesize[i] = stepfile.stat().st_size
+ 
+     assert filesize[1] < 1.2 * filesize[0]
+@@ -2290,7 +2301,7 @@ def test_step_color(tmp_path_factory):
+ 
+     # Use a temporary directory
+     tmpdir = tmp_path_factory.mktemp("out")
+-    step_color_path = os.path.join(tmpdir, "step_color.step")
++    step_color_path = tmpdir / "step_color.step"
+ 
+     # Create a simple assembly with color
+     assy = cq.Assembly()
+diff --git a/tests/test_cadquery.py b/tests/test_cadquery.py
+index 7dcdce52e..2977055ca 100644
+--- a/tests/test_cadquery.py
++++ b/tests/test_cadquery.py
+@@ -3,7 +3,7 @@
+ 
+ """
+ # system modules
+-import math, os.path, time, tempfile
++import math, time, tempfile
+ from pathlib import Path
+ from random import random
+ from random import randrange
+@@ -30,8 +30,8 @@
+ testFont = str(testdataDir / "OpenSans-Regular.ttf")
+ 
+ # where unit test output will be saved
+-OUTDIR = tempfile.gettempdir()
+-SUMMARY_FILE = os.path.join(OUTDIR, "testSummary.html")
++OUTDIR = Path(tempfile.gettempdir())
++SUMMARY_FILE = OUTDIR / "testSummary.html"
+ 
+ SUMMARY_TEMPLATE = """<html>
+     <head>
+@@ -69,10 +69,10 @@ def tearDown(self):
+ 
+         So what we do here is to read the existing file, stick in more content, and leave it
+         """
+-        svgFile = os.path.join(OUTDIR, self._testMethodName + ".svg")
++        svgFile = (OUTDIR / self._testMethodName).with_suffix(".svg")
+ 
+         # all tests do not produce output
+-        if os.path.exists(svgFile):
++        if svgFile.exists():
+             existingSummary = readFileAsString(SUMMARY_FILE)
+             svgText = readFileAsString(svgFile)
+             svgText = svgText.replace(
+@@ -93,8 +93,8 @@ def saveModel(self, shape):
+         shape must be a CQ object
+         Save models in SVG and STEP format
+         """
+-        shape.exportSvg(os.path.join(OUTDIR, self._testMethodName + ".svg"))
+-        shape.val().exportStep(os.path.join(OUTDIR, self._testMethodName + ".step"))
++        shape.exportSvg((OUTDIR / self._testMethodName).with_suffix(".svg"))
++        shape.val().exportStep((OUTDIR / self._testMethodName).with_suffix(".step"))
+ 
+     def testToOCC(self):
+         """
+@@ -1923,7 +1923,7 @@ def testBasicLines(self):
+         # most users dont understand what a wire is, they are just drawing
+ 
+         r = s.lineTo(1.0, 0).lineTo(0, 1.0).close().wire().extrude(0.25)
+-        r.val().exportStep(os.path.join(OUTDIR, "testBasicLinesStep1.STEP"))
++        r.val().exportStep(OUTDIR / "testBasicLinesStep1.STEP")
+ 
+         # no faces on the original workplane
+         self.assertEqual(0, s.faces().size())
+@@ -1938,7 +1938,7 @@ def testBasicLines(self):
+             .cutThruAll()
+         )
+         self.assertEqual(6, r1.faces().size())
+-        r1.val().exportStep(os.path.join(OUTDIR, "testBasicLinesXY.STEP"))
++        r1.val().exportStep(OUTDIR / "testBasicLinesXY.STEP")
+ 
+         # now add a circle through a top
+         r2 = (
+@@ -1948,7 +1948,7 @@ def testBasicLines(self):
+             .cutThruAll()
+         )
+         self.assertEqual(9, r2.faces().size())
+-        r2.val().exportStep(os.path.join(OUTDIR, "testBasicLinesZ.STEP"))
++        r2.val().exportStep(OUTDIR / "testBasicLinesZ.STEP")
+ 
+         self.saveModel(r2)
+ 
+@@ -5841,9 +5841,11 @@ def test_tessellate(self):
+ 
+     def test_export(self):
+ 
+-        w = Workplane().box(1, 1, 1).export("box.brep")
++        filename = Path("box.brep")
+ 
+-        assert (w - Shape.importBrep("box.brep")).val().Volume() == approx(0)
++        w = Workplane().box(1, 1, 1).export(filename)
++
++        assert (w - Shape.importBrep(filename)).val().Volume() == approx(0)
+ 
+     def test_bool_operators(self):
+ 
+diff --git a/tests/test_examples.py b/tests/test_examples.py
+index 6f022484e..f343692ab 100755
+--- a/tests/test_examples.py
++++ b/tests/test_examples.py
+@@ -3,7 +3,7 @@
+ from glob import glob
+ from itertools import chain, count
+ 
+-from path import Path
++from pathlib import Path
+ 
+ from docutils.parsers.rst import directives
+ from docutils.core import publish_doctree
+diff --git a/tests/test_exporters.py b/tests/test_exporters.py
+index f7c1bac8c..a85481be3 100644
+--- a/tests/test_exporters.py
++++ b/tests/test_exporters.py
+@@ -1,10 +1,10 @@
+ """
+-    Tests exporters
++Tests exporters
+ """
++
+ # core modules
+-import os
+ import io
+-from path import Path
++from pathlib import Path
+ import re
+ import sys
+ import math
+@@ -65,7 +65,7 @@ def test_step_options(tmpdir):
+     then imports that STEP to validate it.
+     """
+     # Use a temporary directory
+-    box_path = os.path.join(tmpdir, "out.step")
++    box_path = tmpdir / "out.step"
+ 
+     # Simple object to export
+     box = Workplane().box(1, 1, 1)
+@@ -93,9 +93,9 @@ def test_fused_assembly(tmpdir):
+     assy.add(pin, color=Color(0, 1, 0), name="pin")
+ 
+     # Export the assembly
+-    step_path = os.path.join(tmpdir, "fused.step")
++    step_path = tmpdir / "fused.step"
+     assy.save(
+-        path=str(step_path),
++        path=step_path,
+         exportType=exporters.ExportTypes.STEP,
+         mode=exporters.assembly.ExportModes.FUSED,
+     )
+@@ -120,9 +120,9 @@ def test_fused_not_touching_assembly(tmpdir):
+     assy.add(pin, color=Color(0, 1, 0), name="pin")
+ 
+     # Export the assembly
+-    step_path = os.path.join(tmpdir, "fused_not_touching.step")
++    step_path = tmpdir / "fused_not_touching.step"
+     assy.save(
+-        path=str(step_path),
++        path=step_path,
+         exportType=exporters.ExportTypes.STEP,
+         mode=exporters.assembly.ExportModes.FUSED,
+     )
+@@ -149,9 +149,9 @@ def test_nested_fused_assembly(tmpdir):
+     assy.add(pins, name="pins")
+ 
+     # Export the assembly
+-    step_path = os.path.join(tmpdir, "nested_fused_assembly.step")
++    step_path = tmpdir / "nested_fused_assembly.step"
+     assy.save(
+-        path=str(step_path),
++        path=step_path,
+         exportType=exporters.ExportTypes.STEP,
+         mode=exporters.assembly.ExportModes.FUSED,
+     )
+@@ -172,9 +172,9 @@ def test_fused_assembly_with_one_part(tmpdir):
+     assy.add(body, color=Color(1, 0, 0), name="body")
+ 
+     # Export the assembly
+-    step_path = os.path.join(tmpdir, "single_part_fused_assembly.step")
++    step_path = tmpdir / "single_part_fused_assembly.step"
+     assy.save(
+-        path=str(step_path),
++        path=step_path,
+         exportType=exporters.ExportTypes.STEP,
+         mode=exporters.assembly.ExportModes.FUSED,
+     )
+@@ -198,9 +198,9 @@ def test_fused_assembly_glue_tol(tmpdir):
+     assy.add(pin, color=Color(0, 1, 0), name="pin")
+ 
+     # Export the assembly
+-    step_path = os.path.join(tmpdir, "fused_glue_tol.step")
++    step_path = tmpdir / "fused_glue_tol.step"
+     assy.save(
+-        path=str(step_path),
++        path=step_path,
+         exportType=exporters.ExportTypes.STEP,
+         mode=exporters.assembly.ExportModes.FUSED,
+         fuzzy_tol=0.1,
+@@ -223,9 +223,9 @@ def test_fused_assembly_top_level_only(tmpdir):
+     assy = Assembly(body)
+ 
+     # Export the assembly
+-    step_path = os.path.join(tmpdir, "top_level_only_fused_assembly.step")
++    step_path = tmpdir / "top_level_only_fused_assembly.step"
+     assy.save(
+-        path=str(step_path),
++        path=step_path,
+         exportType=exporters.ExportTypes.STEP,
+         mode=exporters.assembly.ExportModes.FUSED,
+     )
+@@ -250,9 +250,9 @@ def test_fused_assembly_top_level_with_children(tmpdir):
+     assy.add(pin, loc=Location(Vector(0, 0, 15)), color=Color(0, 1, 0), name="pin")
+ 
+     # Export the assembly
+-    step_path = os.path.join(tmpdir, "top_level_with_children_fused_assembly.step")
++    step_path = tmpdir / "top_level_with_children_fused_assembly.step"
+     assy.save(
+-        path=str(step_path),
++        path=step_path,
+         exportType=exporters.ExportTypes.STEP,
+         mode=exporters.assembly.ExportModes.FUSED,
+     )
+@@ -273,9 +273,9 @@ def test_fused_empty_assembly(tmpdir):
+     # Make sure an export with no top level shape raises an exception
+     with pytest.raises(Exception):
+         # Export the assembly
+-        step_path = os.path.join(tmpdir, "empty_fused_assembly.step")
++        step_path = tmpdir / "empty_fused_assembly.step"
+         assy.save(
+-            path=str(step_path),
++            path=step_path,
+             exportType=exporters.ExportTypes.STEP,
+             mode=exporters.assembly.ExportModes.FUSED,
+         )
+@@ -293,11 +293,9 @@ def test_fused_invalid_mode(tmpdir):
+     # Make sure an export with an invalid export mode raises an exception
+     with pytest.raises(Exception):
+         # Export the assembly
+-        step_path = os.path.join(tmpdir, "invalid_mode_fused_assembly.step")
++        step_path = tmpdir / "invalid_mode_fused_assembly.step"
+         assy.save(
+-            path=str(step_path),
+-            exportType=exporters.ExportTypes.STEP,
+-            mode="INCORRECT",
++            path=step_path, exportType=exporters.ExportTypes.STEP, mode="INCORRECT",
+         )
+ 
+ 
+@@ -556,14 +554,14 @@ def testSTL(self):
+     def testSVG(self):
+         self._exportBox(exporters.ExportTypes.SVG, ["<svg", "<g transform"])
+ 
+-        exporters.export(self._box(), "out.svg")
++        exporters.export(self._box(), Path("out.svg"))
+ 
+     def testSVGOptions(self):
+         self._exportBox(exporters.ExportTypes.SVG, ["<svg", "<g transform"])
+ 
+         exporters.export(
+             self._box(),
+-            "out.svg",
++            Path("out.svg"),
+             opt={
+                 "width": 100,
+                 "height": None,
+@@ -581,7 +579,7 @@ def testSVGOptions(self):
+ 
+         exporters.export(
+             self._box(),
+-            "out.svg",
++            Path("out.svg"),
+             opt={
+                 "width": None,
+                 "height": 100,
+@@ -600,26 +598,26 @@ def testSVGOptions(self):
+     def testAMF(self):
+         self._exportBox(exporters.ExportTypes.AMF, ["<amf units", "</object>"])
+ 
+-        exporters.export(self._box(), "out.amf")
++        exporters.export(self._box(), Path("out.amf"))
+ 
+     def testSTEP(self):
+         self._exportBox(exporters.ExportTypes.STEP, ["FILE_SCHEMA"])
+ 
+-        exporters.export(self._box(), "out.step")
++        exporters.export(self._box(), Path("out.step"))
+ 
+     def test3MF(self):
+         self._exportBox(
+             exporters.ExportTypes.THREEMF,
+             ["3D/3dmodel.model", "[Content_Types].xml", "_rels/.rels"],
+         )
+-        exporters.export(self._box(), "out1.3mf")  # Compound
+-        exporters.export(self._box().val(), "out2.3mf")  # Solid
++        exporters.export(self._box(), Path("out1.3mf"))  # Compound
++        exporters.export(self._box().val(), Path("out2.3mf"))  # Solid
+ 
+         # No zlib support
+         import zlib
+ 
+         sys.modules["zlib"] = None
+-        exporters.export(self._box(), "out3.3mf")
++        exporters.export(self._box(), Path("out3.3mf"))
+         sys.modules["zlib"] = zlib
+ 
+     def testTJS(self):
+@@ -627,11 +625,11 @@ def testTJS(self):
+             exporters.ExportTypes.TJS, ["vertices", "formatVersion", "faces"]
+         )
+ 
+-        exporters.export(self._box(), "out.tjs")
++        exporters.export(self._box(), Path("out.tjs"))
+ 
+     def testVRML(self):
+ 
+-        exporters.export(self._box(), "out.vrml")
++        exporters.export(self._box(), Path("out.vrml"))
+ 
+         with open("out.vrml") as f:
+             res = f.read(10)
+@@ -639,20 +637,22 @@ def testVRML(self):
+         assert res.startswith("#VRML V2.0")
+ 
+         # export again to trigger all paths in the code
+-        exporters.export(self._box(), "out.vrml")
++        exporters.export(self._box(), Path("out.vrml"))
+ 
+     def testVTP(self):
+ 
+-        exporters.export(self._box(), "out.vtp")
++        filename = Path("out.vtp")
+ 
+-        with open("out.vtp") as f:
++        exporters.export(self._box(), filename)
++
++        with open(filename) as f:
+             res = f.read(100)
+ 
+         assert res.startswith('<?xml version="1.0"?>\n<VTKFile')
+ 
+     def testDXF(self):
+ 
+-        exporters.export(self._box().section(), "out.dxf")
++        exporters.export(self._box().section(), Path("out.dxf"))
+ 
+         s1 = (
+             Workplane("XZ")
+@@ -663,9 +663,10 @@ def testDXF(self):
+             .fillet(1)
+             .section()
+         )
+-        exporters.dxf.exportDXF(s1, "res1.dxf")
++        filename = Path("res1.dxf")
++        exporters.dxf.exportDXF(s1, filename)
+ 
+-        s1_i = importers.importDXF("res1.dxf")
++        s1_i = importers.importDXF(filename)
+ 
+         self.assertAlmostEqual(s1.val().Area(), s1_i.val().Area(), 6)
+         self.assertAlmostEqual(s1.edges().size(), s1_i.edges().size())
+@@ -674,9 +675,10 @@ def testDXF(self):
+         s2 = (
+             Workplane().spline(pts).close().extrude(1).edges("|Z").fillet(0.1).section()
+         )
+-        exporters.dxf.exportDXF(s2, "res2.dxf")
++        filename2 = Path("res2.dxf")
++        exporters.dxf.exportDXF(s2, filename2)
+ 
+-        s2_i = importers.importDXF("res2.dxf")
++        s2_i = importers.importDXF(filename2)
+ 
+         self.assertAlmostEqual(s2.val().Area(), s2_i.val().Area(), 6)
+         self.assertAlmostEqual(s2.edges().size(), s2_i.edges().size())
+@@ -690,9 +692,10 @@ def testDXF(self):
+             .fillet(0.1)
+             .section()
+         )
+-        exporters.dxf.exportDXF(s3, "res3.dxf")
++        filename3 = Path("res3.dxf")
++        exporters.dxf.exportDXF(s3, filename3)
+ 
+-        s3_i = importers.importDXF("res3.dxf")
++        s3_i = importers.importDXF(filename3)
+ 
+         self.assertAlmostEqual(s3.val().Area(), s3_i.val().Area(), 6)
+         self.assertAlmostEqual(s3.edges().size(), s3_i.edges().size())
+@@ -701,18 +704,20 @@ def testDXF(self):
+ 
+         s4 = Workplane("XY").box(80, 60, 5).cut(cyl).section()
+ 
+-        exporters.dxf.exportDXF(s4, "res4.dxf")
++        filename4 = Path("res4.dxf")
++        exporters.dxf.exportDXF(s4, filename4)
+ 
+-        s4_i = importers.importDXF("res4.dxf")
++        s4_i = importers.importDXF(filename4)
+ 
+         self.assertAlmostEqual(s4.val().Area(), s4_i.val().Area(), 6)
+         self.assertAlmostEqual(s4.edges().size(), s4_i.edges().size())
+ 
+         # test periodic spline
+         w = Workplane().spline([(1, 1), (2, 2), (3, 2), (3, 1)], periodic=True)
+-        exporters.dxf.exportDXF(w, "res5.dxf")
++        filename5 = Path("res5.dxf")
++        exporters.dxf.exportDXF(w, filename5)
+ 
+-        w_i = importers.importDXF("res5.dxf")
++        w_i = importers.importDXF(filename5)
+ 
+         self.assertAlmostEqual(w.val().Length(), w_i.wires().val().Length(), 6)
+ 
+@@ -722,9 +727,10 @@ def testDXF(self):
+         curve = GeomConvert.CurveToBSplineCurve_s(adaptor.Curve().Curve())
+ 
+         e = Workplane().add(Edge(BRepBuilderAPI_MakeEdge(curve).Shape()))
+-        exporters.dxf.exportDXF(e, "res6.dxf")
++        filename6 = Path("res6.dxf")
++        exporters.dxf.exportDXF(e, filename6)
+ 
+-        e_i = importers.importDXF("res6.dxf")
++        e_i = importers.importDXF(filename6)
+ 
+         self.assertAlmostEqual(e.val().Length(), e_i.wires().val().Length(), 6)
+ 
+@@ -739,26 +745,29 @@ def testDXF(self):
+ 
+         s5.plane = Plane(origin=(0, 0.1, 0.5), normal=(0.05, 0.05, 1))
+         s5 = s5.section()
+-        exporters.dxf.exportDXF(s5, "res7.dxf")
++        filename7 = Path("res7.dxf")
++        exporters.dxf.exportDXF(s5, filename7)
+ 
+-        s5_i = importers.importDXF("res7.dxf")
++        s5_i = importers.importDXF(filename7)
+ 
+         self.assertAlmostEqual(s5.val().Area(), s5_i.val().Area(), 4)
+ 
+     def testBIN(self):
+ 
+-        exporters.export(self._box(), "out.bin")
++        filename = Path("out.bin")
++
++        exporters.export(self._box(), filename)
+ 
+-        s = Shape.importBin("out.bin")
++        s = Shape.importBin(filename)
+         assert s.isValid()
+ 
+     def testTypeHandling(self):
+ 
+         with self.assertRaises(ValueError):
+-            exporters.export(self._box(), "out.random")
++            exporters.export(self._box(), Path("out.random"))
+ 
+         with self.assertRaises(ValueError):
+-            exporters.export(self._box(), "out.stl", "STP")
++            exporters.export(self._box(), Path("out.stl"), "STP")
+ 
+ 
+ @pytest.mark.parametrize(
+@@ -779,12 +788,12 @@ def test_stl_ascii(tmpdir, box123, id, opt, matchvals):
+     :param matchval: List of strings to match at start of file
+     """
+ 
+-    fpath = tmpdir.joinpath(f"stl_ascii_{id}.stl").resolve()
++    fpath = tmpdir / f"stl_ascii_{id}.stl"
+     assert not fpath.exists()
+ 
+     assert matchvals
+ 
+-    exporters.export(box123, str(fpath), None, 0.1, 0.1, opt)
++    exporters.export(box123, fpath, None, 0.1, 0.1, opt)
+ 
+     with open(fpath, "r") as f:
+         for i, line in enumerate(f):
+@@ -812,12 +821,12 @@ def test_stl_binary(tmpdir, box123, id, opt, matchval):
+     :param matchval: Check that the file starts with the specified value
+     """
+ 
+-    fpath = tmpdir.joinpath(f"stl_binary_{id}.stl").resolve()
++    fpath = tmpdir / f"stl_binary_{id}.stl"
+     assert not fpath.exists()
+ 
+     assert matchval
+ 
+-    exporters.export(box123, str(fpath), None, 0.1, 0.1, opt)
++    exporters.export(box123, fpath, None, 0.1, 0.1, opt)
+ 
+     with open(fpath, "rb") as f:
+         r = f.read(len(matchval))
+@@ -833,9 +842,9 @@ def test_assy_vtk_rotation(tmpdir):
+         v0, name="v0", loc=Location(Vector(0, 0, 0), Vector(1, 0, 0), 90),
+     )
+ 
+-    fwrl = Path(tmpdir) / "v0.wrl"
++    fwrl = tmpdir / "v0.wrl"
+     assert not fwrl.exists()
+-    assy.save(str(fwrl), "VRML")
++    assy.save(fwrl, "VRML")
+     assert fwrl.exists()
+ 
+     matched_rot = False
+@@ -886,20 +895,20 @@ def test_dxf_approx():
+ 
+     pts = [(0, 0), (0, 0.5), (1, 1)]
+     w1 = Workplane().spline(pts).close().extrude(1).edges("|Z").fillet(0.1).section()
+-    exporters.exportDXF(w1, "orig.dxf")
++    exporters.exportDXF(w1, Path("orig.dxf"))
+ 
+     assert _dxf_spline_max_degree("orig.dxf") == 6
+ 
+     exporters.exportDXF(w1, "limit1.dxf", approx="spline")
+-    w1_i1 = importers.importDXF("limit1.dxf")
++    w1_i1 = importers.importDXF(Path("limit1.dxf"))
+ 
+     assert _dxf_spline_max_degree("limit1.dxf") == 3
+ 
+     assert w1.val().Area() == approx(w1_i1.val().Area(), 1e-3)
+     assert w1.edges().size() == w1_i1.edges().size()
+ 
+-    exporters.exportDXF(w1, "limit2.dxf", approx="arc")
+-    w1_i2 = importers.importDXF("limit2.dxf")
++    exporters.exportDXF(w1, Path("limit2.dxf"), approx="arc")
++    w1_i2 = importers.importDXF(Path("limit2.dxf"))
+ 
+     assert _check_dxf_no_spline("limit2.dxf")
+ 
+@@ -922,7 +931,7 @@ def test_dxf_text(tmpdir, testdatadir):
+         )
+     )
+ 
+-    fname = tmpdir.joinpath(f"dxf_text.dxf").resolve()
++    fname = tmpdir / "dxf_text.dxf"
+     exporters.exportDXF(w1.section(), fname)
+ 
+     s2 = Sketch().importDXF(fname)
+@@ -955,7 +964,7 @@ def test_dxf_ellipse_arc(tmpdir):
+     dxf = exporters.dxf.DxfDocument()
+     dxf.add_layer("layer1", color=1)
+     dxf.add_shape(w1, "layer1")
+-    fname = tmpdir.joinpath("ellipse_arc.dxf").resolve()
++    fname = tmpdir / "ellipse_arc.dxf"
+     dxf.document.saveas(fname)
+ 
+     s1 = Sketch().importDXF(fname)
+diff --git a/tests/test_free_functions.py b/tests/test_free_functions.py
+index 222d7b5d3..c2490e88c 100644
+--- a/tests/test_free_functions.py
++++ b/tests/test_free_functions.py
+@@ -61,6 +61,7 @@
+ 
+ from pytest import approx, raises, fixture
+ from math import pi
++from pathlib import Path
+ 
+ #%% test utils
+ 
+@@ -881,10 +882,12 @@ def test_project():
+ # %% export
+ def test_export():
+ 
++    filename = Path("box.brep")
++
+     b1 = box(1, 1, 1)
+-    b1.export("box.brep")
++    b1.export(filename)
+ 
+-    b2 = Shape.importBrep("box.brep")
++    b2 = Shape.importBrep(filename)
+ 
+     assert (b1 - b2).Volume() == approx(0)
+ 
+diff --git a/tests/test_importers.py b/tests/test_importers.py
+index 5245d915a..12e3c9421 100644
+--- a/tests/test_importers.py
++++ b/tests/test_importers.py
+@@ -1,6 +1,7 @@
+ """
+-    Tests file importers such as STEP
++Tests file importers such as STEP
+ """
++
+ # core modules
+ import tempfile
+ import os
+@@ -8,12 +9,13 @@
+ from cadquery import importers, Workplane, Compound
+ from tests import BaseTest
+ from pytest import approx, raises
++from pathlib import Path
+ 
+ # where unit test output will be saved
+-OUTDIR = tempfile.gettempdir()
++OUTDIR = Path(tempfile.gettempdir())
+ 
+ # test data directory
+-testdataDir = os.path.join(os.path.dirname(__file__), "testdata")
++testdataDir = Path(__file__).parent / "testdata"
+ 
+ 
+ class TestImporters(BaseTest):
+@@ -119,7 +121,7 @@ def assertNFacesAndNVertices(self, workplane, nFacesXYZ, nVerticesXYZ):
+         self.assertEqual(workplane.faces("+Z").vertices().size(), nVerticesZ)
+ 
+     def testInvalidImportTypeRaisesRuntimeError(self):
+-        fileName = os.path.join(OUTDIR, "tempSTEP.step")
++        fileName = OUTDIR / "tempSTEP.step"
+         shape = Workplane("XY").box(1, 2, 3).val()
+         shape.exportStep(fileName)
+         self.assertRaises(RuntimeError, importers.importShape, "INVALID", fileName)
+@@ -128,39 +130,29 @@ def testBREP(self):
+         """
+         Test BREP file import.
+         """
+-        self.importBox(
+-            importers.ImportTypes.BREP, os.path.join(OUTDIR, "tempBREP.brep")
+-        )
+-        self.importCompound(
+-            importers.ImportTypes.BREP, os.path.join(OUTDIR, "tempBREP.brep")
+-        )
++        self.importBox(importers.ImportTypes.BREP, OUTDIR / "tempBREP.brep")
++        self.importCompound(importers.ImportTypes.BREP, OUTDIR / "tempBREP.brep")
+ 
+     def testBIN(self):
+         """
+         Test binary BREP file import.
+         """
+-        self.importBox(importers.ImportTypes.BIN, os.path.join(OUTDIR, "tempBIN.bin"))
+-        self.importCompound(
+-            importers.ImportTypes.BIN, os.path.join(OUTDIR, "tempBIN.bin")
+-        )
++        self.importBox(importers.ImportTypes.BIN, OUTDIR / "tempBIN.bin")
++        self.importCompound(importers.ImportTypes.BIN, OUTDIR / "tempBIN.bin")
+ 
+     def testSTEP(self):
+         """
+         Tests STEP file import
+         """
+-        self.importBox(
+-            importers.ImportTypes.STEP, os.path.join(OUTDIR, "tempSTEP.step")
+-        )
+-        self.importCompound(
+-            importers.ImportTypes.STEP, os.path.join(OUTDIR, "tempSTEP.step")
+-        )
++        self.importBox(importers.ImportTypes.STEP, OUTDIR / "tempSTEP.step")
++        self.importCompound(importers.ImportTypes.STEP, OUTDIR / "tempSTEP.step")
+ 
+     def testInvalidSTEP(self):
+         """
+         Attempting to load an invalid STEP file should throw an exception, but
+         not segfault.
+         """
+-        tmpfile = os.path.join(OUTDIR, "badSTEP.step")
++        tmpfile = OUTDIR / "badSTEP.step"
+         with open(tmpfile, "w") as f:
+             f.write("invalid STEP file")
+         with self.assertRaises(ValueError):
+@@ -172,7 +164,7 @@ def testImportMultipartSTEP(self):
+         loaded.
+         """
+ 
+-        filename = os.path.join(testdataDir, "red_cube_blue_cylinder.step")
++        filename = testdataDir / "red_cube_blue_cylinder.step"
+         objs = importers.importShape(importers.ImportTypes.STEP, filename)
+         self.assertEqual(2, len(objs.all()))
+ 
+@@ -181,7 +173,7 @@ def testImportDXF(self):
+         Test DXF import with various tolerances.
+         """
+ 
+-        filename = os.path.join(testdataDir, "gear.dxf")
++        filename = testdataDir / "gear.dxf"
+ 
+         with self.assertRaises(ValueError):
+             # tol >~ 2e-4 required for closed wires
+@@ -201,37 +193,37 @@ def testImportDXF(self):
+ 
+         # additional files to test more DXF entities
+ 
+-        filename = os.path.join(testdataDir, "MC 12x31.dxf")
++        filename = testdataDir / "MC 12x31.dxf"
+         obj = importers.importDXF(filename)
+         self.assertTrue(obj.val().isValid())
+ 
+-        filename = os.path.join(testdataDir, "1001.dxf")
++        filename = testdataDir / "1001.dxf"
+         obj = importers.importDXF(filename)
+         self.assertTrue(obj.val().isValid())
+ 
+         # test spline import
+ 
+-        filename = os.path.join(testdataDir, "spline.dxf")
++        filename = testdataDir / "spline.dxf"
+         obj = importers.importDXF(filename, tol=1)
+         self.assertTrue(obj.val().isValid())
+         self.assertEqual(obj.faces().size(), 1)
+         self.assertEqual(obj.wires().size(), 2)
+ 
+         # test rational spline import
+-        filename = os.path.join(testdataDir, "rational_spline.dxf")
++        filename = testdataDir / "rational_spline.dxf"
+         obj = importers.importDXF(filename)
+         self.assertTrue(obj.val().isValid())
+         self.assertEqual(obj.faces().size(), 1)
+         self.assertEqual(obj.edges().size(), 1)
+ 
+         # importing of a complex shape exported from Inkscape
+-        filename = os.path.join(testdataDir, "genshi.dxf")
++        filename = testdataDir / "genshi.dxf"
+         obj = importers.importDXF(filename)
+         self.assertTrue(obj.val().isValid())
+         self.assertEqual(obj.faces().size(), 1)
+ 
+         # test layer filtering
+-        filename = os.path.join(testdataDir, "three_layers.dxf")
++        filename = testdataDir / "three_layers.dxf"
+         obj = importers.importDXF(filename, exclude=["Layer2"])
+         self.assertTrue(obj.val().isValid())
+         self.assertEqual(obj.faces().size(), 2)
+diff --git a/tests/test_selectors.py b/tests/test_selectors.py
+index 7e96d6e23..25720c274 100644
+--- a/tests/test_selectors.py
++++ b/tests/test_selectors.py
+@@ -11,7 +11,6 @@
+ import math
+ import unittest
+ import sys
+-import os.path
+ 
+ # my modules
+ from tests import BaseTest, makeUnitCube, makeUnitSquareWire
+diff --git a/tests/test_sketch.py b/tests/test_sketch.py
+index a75241d40..b0eee53c4 100644
+--- a/tests/test_sketch.py
++++ b/tests/test_sketch.py
+@@ -6,8 +6,9 @@
+ 
+ from pytest import approx, raises, fixture
+ from math import pi, sqrt
++from pathlib import Path
+ 
+-testdataDir = os.path.join(os.path.dirname(__file__), "testdata")
++testdataDir = Path(__file__).parent / "testdata"
+ 
+ 
+ def test_face_interface():
+@@ -747,7 +748,7 @@ def test_constraint_solver():
+ 
+ def test_dxf_import():
+ 
+-    filename = os.path.join(testdataDir, "gear.dxf")
++    filename = testdataDir / "gear.dxf"
+ 
+     s1 = Sketch().importDXF(filename, tol=1e-3)
+ 
+@@ -822,8 +823,10 @@ def test_bool_ops():
+ 
+ def test_export():
+ 
+-    s1 = Sketch().rect(1, 1).export("sketch.dxf")
+-    s2 = Sketch().importDXF("sketch.dxf")
++    filename = Path("sketch.dxf")
++
++    s1 = Sketch().rect(1, 1).export(filename)
++    s2 = Sketch().importDXF(filename)
+ 
+     assert (s1 - s2).val().Area() == approx(0)
+ 
+diff --git a/tests/test_vis.py b/tests/test_vis.py
+index e22ff2eba..d6a065068 100644
+--- a/tests/test_vis.py
++++ b/tests/test_vis.py
+@@ -16,7 +16,7 @@
+ from vtkmodules.vtkIOImage import vtkPNGWriter
+ 
+ from pytest import fixture, raises
+-from path import Path
++from pathlib import Path
+ 
+ from typish import instance_of
+ from typing import List
+@@ -140,8 +140,8 @@ def test_show(wp, assy, sk, patch_vtk):
+ def test_screenshot(wp, tmpdir, patch_vtk):
+ 
+     # smoke test for now
+-    with tmpdir:
+-        show(wp, interact=False, screenshot="img.png", trihedron=False, gradient=False)
++    filename = tmpdir / "img.png"
++    show(wp, interact=False, screenshot=filename, trihedron=False, gradient=False)
+ 
+ 
+ def test_ctrlPts():
